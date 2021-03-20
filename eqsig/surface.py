@@ -1,6 +1,4 @@
 import numpy as np
-import scipy.integrate
-from eqsig import functions as fn
 
 
 def trim_to_length(values, npts, surf2depth_travel_times, dt, trim=False, start=False, s2s_travel_time=0.0):
@@ -72,22 +70,37 @@ def calc_surface_energy(asig, travel_times, nodal=True, up_red=1., down_red=1., 
     -------
 
     """
-    if not hasattr(up_red, '__len__'):
-        up_red = up_red * np.ones(len(travel_times))
-    if not hasattr(down_red, '__len__'):
-        down_red = down_red * np.ones(len(travel_times))
-    shifts = np.array(2 * travel_times / asig.dt)
-    max_shift = int(max(shifts))
-    up_wave = np.pad(asig.values, (0, max_shift), mode='constant', constant_values=0)[np.newaxis, :] * up_red[:, np.newaxis]  # 1d
-    dshifted = np.arange(asig.npts + max_shift)[np.newaxis, :] - shifts[:, np.newaxis]
-    down_waves = np.interp(dshifted, np.arange(asig.npts), asig.values, left=0) * down_red[:, np.newaxis]
+    from scipy.integrate import cumtrapz
+    # if not hasattr(up_red, '__len__'):
+    #     up_red = up_red * np.ones(len(travel_times))
+    # if not hasattr(down_red, '__len__'):
+    #     down_red = down_red * np.ones(len(travel_times))
+    if not hasattr(travel_times, '__len__'):
+        travel_times = np.array([travel_times])
+    else:
+        travel_times = np.array(travel_times)
+    shifts = 2 * travel_times / asig.dt
+    max_shift = int(np.max(shifts))
+    up_wave = np.pad(asig.values, (0, max_shift), mode='constant', constant_values=0)
+    dshifted = np.arange(asig.npts + max_shift)[np.newaxis, :] - shifts[:, np.newaxis]  # TODO: not needed if shifts is scalar
+    down_waves = np.interp(dshifted, np.arange(asig.npts), asig.values, left=0, right=0)
+    if hasattr(up_red, '__len__'):
+        up_wave = up_wave[np.newaxis, :] * up_red[:, np.newaxis]  # 1d
+        down_waves *= down_red[:, np.newaxis]
+    else:
+        up_wave = up_wave * up_red  # 1d  # TODO: may need to increase dimensions here
+        down_waves *= down_red
     if nodal:
         acc_series = - down_waves + up_wave
     else:
         acc_series = down_waves + up_wave
-    velocity = scipy.integrate.cumtrapz(acc_series, dx=asig.dt, initial=0, axis=1)
+    velocity = cumtrapz(acc_series, dx=asig.dt, initial=0, axis=1)
     e = 0.5 * velocity * np.abs(velocity)
-    return trim_to_length(e, asig.npts, travel_times, asig.dt, trim=trim, start=start, s2s_travel_time=stt)
+    e = trim_to_length(e, asig.npts, travel_times, asig.dt, trim=trim, start=start, s2s_travel_time=stt)
+    if len(travel_times) == 1:
+        return e[0]
+    else:
+        return e
 
 
 # def dep_calc_surface_energy(asig, travel_times, nodal=True, up_red=1, down_red=1, stt=0.0, trim=False, start=False):
@@ -132,18 +145,17 @@ def calc_surface_energy(asig, travel_times, nodal=True, up_red=1., down_red=1., 
 def calc_cum_abs_surface_energy(asig, travel_times, nodal=True, up_red=1, down_red=1, stt=0.0, trim=False, start=False):
     energy = calc_surface_energy(asig, travel_times, nodal=nodal, up_red=up_red, down_red=down_red, stt=stt,
                                  trim=trim, start=start)
-    diff = np.zeros_like(energy)
-    diff[:, 1:] = np.diff(energy, axis=1)
-    return np.cumsum(np.abs(diff), axis=1)
+    diff = np.diff(energy, axis=-1, prepend=0)
+    return np.cumsum(np.abs(diff), axis=-1)
 
-
-if __name__ == '__main__':
-    a = np.linspace(0, 10, 100)
-    b = np.sin(a)
-    import eqsig
-    accsig = eqsig.AccSignal(b, 0.1)
-    t_times = np.array([0.1, 0.2])
-    ke = calc_cum_abs_surface_energy(accsig, t_times, stt=0.3, nodal=True, up_red=1, down_red=1, trim=True)
-
-    ke = calc_cum_abs_surface_energy(accsig, t_times, stt=0.3, nodal=True, up_red=tshifts, down_red=tshifts, trim=True)
+#
+# if __name__ == '__main__':
+#     a = np.linspace(0, 10, 100)
+#     b = np.sin(a)
+#     import eqsig
+#     accsig = eqsig.AccSignal(b, 0.1)
+#     t_times = np.array([0.1, 0.2])
+#     ke = calc_cum_abs_surface_energy(accsig, t_times, stt=0.3, nodal=True, up_red=1, down_red=1, trim=True)
+#
+#     ke = calc_cum_abs_surface_energy(accsig, t_times, stt=0.3, nodal=True, up_red=tshifts, down_red=tshifts, trim=True)
 

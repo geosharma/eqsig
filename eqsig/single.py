@@ -1,52 +1,55 @@
 import numpy as np
-import scipy.signal as ss
-import scipy
 
 from eqsig import exceptions
-from eqsig.functions import get_section_average, generate_smooth_fa_spectrum, interp_array_to_approx_dt
+from eqsig.functions import get_section_average, calc_smooth_fa_spectrum, interp_array_to_approx_dt
 import eqsig.sdof as dh
 import eqsig.displacements as sd
-import eqsig.im as sm
 from eqsig import im
 from eqsig.exceptions import deprecation
 
 
 class Signal(object):
+    """
+    A time series object
+
+    Parameters
+    ----------
+    values: array_like
+        values of the time series
+    dt: float
+        the time step
+    label: str, optional
+        A name for the signal
+    smooth_freq_range: tuple, optional
+        The frequency range for computing the smooth FAS
+    verbose: int, optional
+        Level of console output
+    ccbox: int, optional
+        colour id for plotting
+    """
     _npts = None
     _smooth_freq_points = 61
     _fa_spectrum = None
-    _fa_frequencies = None
+    _fa_freqs = None
     _cached_fa = False
     _cached_smooth_fa = False
+    _smooth_fa_freqs = None
+    _smooth_freq_range = None
 
-    def __init__(self, values, dt, label='m1', smooth_freq_range=(0.1, 30), verbose=0, ccbox=0):
-        """
-        A time series object
-
-        Parameters
-        ----------
-        values: array_like
-            values of the time series
-        dt: float
-            the time step
-        label: str, optional
-            A name for the signal
-        smooth_freq_range: tuple, optional
-            The frequency range for computing the smooth FAS
-        verbose: int, optional
-            Level of console output
-        ccbox: int, optional
-            colour id for plotting
-        :return:
-        """
+    def __init__(self, values, dt, label='m1', smooth_freq_range=(0.1, 30), smooth_fa_freqs=None,
+                 verbose=0, ccbox=0):
         self.verbose = verbose
         self._dt = dt
         self._values = np.array(values)
         self.label = label
-        self._smooth_freq_range = smooth_freq_range
+        if smooth_fa_freqs is not None:
+            self.smooth_fa_freqs = smooth_fa_freqs
+        else:
+            self.set_smooth_fa_frequecies_by_range(smooth_freq_range, 50)
+        self._smooth_fa_spectrum = np.zeros(len(self.smooth_fa_freqs))
         self._npts = len(self.values)
-        self._smooth_fa_spectrum = np.zeros((self.smooth_freq_points))
-        self._smooth_fa_frequencies = np.zeros(self.smooth_freq_points)
+        # lf = np.log10(smooth_freq_range)
+        # self._smooth_fa_frequencies = np.logspace(lf[0], lf[1], 30, base=10)
         self.ccbox = ccbox
 
     @property
@@ -75,48 +78,91 @@ class Signal(object):
 
     @property
     def fa_spectrum(self):
-        """Generate the one-sided Fourier Amplitude spectrum"""
+        """The one-sided Fourier Amplitude spectrum"""
         if not self._cached_fa:
             self.generate_fa_spectrum()
         return self._fa_spectrum
 
-    def generate_fa_spectrum(self):
-        n_factor = 2 ** int(np.ceil(np.log2(self.npts)))
-        fa = scipy.fft(self.values, n=n_factor)
+    def gen_fa_spectrum(self, p2_plus=0, n=None):
+        """
+        Sets the one-sided Fourier Amplitude spectrum and frequencies
+
+        Parameters
+        ----------
+        p2_plus: int (default=0)
+            Additional increments of `n` such that length of signal used is `n` and `n=ceil(log2(self.npts) + p2_plus))`.
+        n: int (optional)
+            If specified the signal length is padded with zeros before computing FAS
+
+        """
+        if n is not None:
+            n_factor = n
+        else:
+            n_factor = 2 ** int(np.ceil(np.log2(self.npts)) + p2_plus)
+        fa = np.fft.fft(self.values, n=n_factor)
         points = int(n_factor / 2)
         self._fa_spectrum = fa[range(points)] * self.dt
-        self._fa_frequencies = np.arange(points) / (2 * points * self.dt)
+        self._fa_freqs = np.arange(points) / (2 * points * self.dt)
         self._cached_fa = True
+
+    def generate_fa_spectrum(self):
+        self.gen_fa_spectrum()
 
     @property
     def fa_frequencies(self):
+        return self.fa_freqs
+
+    @property
+    def fa_freqs(self):
         if not self._cached_fa:
-            self.generate_fa_spectrum()
-        return self._fa_frequencies
+            self.gen_fa_spectrum()
+        return self._fa_freqs
 
     @property
     def smooth_freq_range(self):
-        return self._smooth_freq_range
+        deprecation('AccSignal.smooth_freq_range is deprecated. Use AccSignal.smooth_fa_freqs')
+        return self.smooth_fa_freqs[0], self.smooth_fa_freqs[-1]
 
     @smooth_freq_range.setter
     def smooth_freq_range(self, limits):
+        deprecation('AccSignal.smooth_freq_range is deprecated. Set AccSignal.smooth_fa_freqs directly')
+        lf = np.log10(np.array(limits))
+        self.smooth_fa_freqs = np.logspace(lf[0], lf[1], self.smooth_freq_points, base=10)
+
+    def set_smooth_fa_frequecies_by_range(self, limits, n_points):
+        lf = np.log10(limits)
+        self._smooth_fa_freqs = np.logspace(lf[0], lf[1], n_points, base=10)
         self._smooth_freq_range = np.array(limits)
         self._cached_smooth_fa = False
 
     @property
     def smooth_freq_points(self):
-        return self._smooth_freq_points
+        deprecation('AccSignal.smooth_freq_points is deprecated. Use len(AccSignal.smooth_fa_freqs)')
+        return len(self.smooth_fa_freqs)
 
     @smooth_freq_points.setter
     def smooth_freq_points(self, value):
-        self._smooth_freq_points = value
-        self._cached_smooth_fa = False
+        deprecation('AccSignal.smooth_freq_points is deprecated. Set AccSignal.smooth_fa_freqs directly')
+        lf = np.log10(self.smooth_freq_range)
+        self.smooth_fa_freqs = np.logspace(lf[0], lf[1], int(value), base=10)
+
+    @property
+    def smooth_fa_freqs(self):
+        return self._smooth_fa_freqs
 
     @property
     def smooth_fa_frequencies(self):
-        if not self._cached_smooth_fa:
-            self.generate_smooth_fa_spectrum()
-        return self._smooth_fa_frequencies
+        return self._smooth_fa_freqs
+
+    @smooth_fa_frequencies.setter
+    def smooth_fa_frequencies(self, frequencies):  # backward compatible using 'frequencies'
+        self._smooth_fa_freqs = np.array(frequencies, dtype=np.float)
+        self._cached_smooth_fa = False
+
+    @smooth_fa_freqs.setter
+    def smooth_fa_freqs(self, freqs):
+        self._smooth_fa_freqs = np.array(freqs, dtype=np.float)
+        self._cached_smooth_fa = False
 
     @property
     def smooth_fa_spectrum(self):
@@ -130,6 +176,9 @@ class Signal(object):
         self._cached_fa = False
 
     def generate_smooth_fa_spectrum(self, band=40):
+        self.gen_smooth_fa_spectrum(band=band)
+
+    def gen_smooth_fa_spectrum(self, smooth_fa_freqs=None, band=40):
         """
         Calculates the smoothed Fourier Amplitude Spectrum
         using the method by Konno and Ohmachi 1998
@@ -139,14 +188,10 @@ class Signal(object):
         band: int
             range to smooth over
         """
-        lf = np.log10(self.smooth_freq_range)
-
-        fa_frequencies = self.fa_frequencies
-        fa_spectrum = self.fa_spectrum
-        smooth_fa_frequencies = np.logspace(lf[0], lf[1], self.smooth_freq_points, base=10)
-        self._smooth_fa_spectrum = generate_smooth_fa_spectrum(smooth_fa_frequencies, fa_frequencies,
-                                                               fa_spectrum, band=band)
-        self._smooth_fa_frequencies = smooth_fa_frequencies
+        if smooth_fa_freqs is not None:
+            self._smooth_fa_freqs = smooth_fa_freqs
+        self._smooth_fa_spectrum = calc_smooth_fa_spectrum(self.fa_freqs,
+                                                               self.fa_spectrum, self.smooth_fa_freqs, band=band)
         self._cached_smooth_fa = True
 
     def butter_pass(self, cut_off=(0.1, 15), **kwargs):
@@ -174,6 +219,7 @@ class Signal(object):
             each increment of the value doubles the record length using zero padding.
         :return:
         """
+        from scipy.signal import butter, filtfilt
         if isinstance(cut_off, list) or isinstance(cut_off, tuple) or isinstance(cut_off, np.Array):
             pass
         else:
@@ -226,8 +272,8 @@ class Signal(object):
             f_len = org_len
 
         wp = cut_off / nyq
-        b, a = ss.butter(filter_order, wp, btype=filter_type)
-        mote = ss.filtfilt(b, a, mote)
+        b, a = butter(filter_order, wp, btype=filter_type)
+        mote = filtfilt(b, a, mote)
         # removing extra zeros from gibbs effect
         mote = mote[s_len:f_len]  # TODO: don't use -1
 
@@ -288,8 +334,10 @@ class Signal(object):
         """
         Adds a single value to every value in the signal.
 
-        :param constant:
-        :return:
+        Parameters
+        ----------
+        constant: float
+            Value to be added to time series
         """
         self.reset_values(self.values + constant)
 
@@ -297,8 +345,10 @@ class Signal(object):
         """
         Adds a series of values to the values in the signal.
 
-        :param series: A series of values
-        :return:
+        Parameters
+        ----------
+        series: array_like
+            A series of values
         """
         if len(series) == self.npts:
             self.reset_values(self.values + series)
@@ -326,7 +376,10 @@ class Signal(object):
         Averages the values over a width (chunk of numbers)
         replaces the value in the centre of the chunk.
 
-        :param width: The range over which values are averaged
+        Parameters
+        ----------
+        width: int
+            The number of points over which values are averaged
         """
 
         mot = self.values
@@ -347,30 +400,33 @@ class Signal(object):
 
 
 class AccSignal(Signal):
+    """
+    A time series object
 
-    def __init__(self, values, dt, label='m1', smooth_freq_range=(0.1, 30), verbose=0, response_times=(0.1, 5), ccbox=0):
-        """
-        A time series object
+    Parameters
+    ----------
+    values: array_like
+        Acceleration time series - should be in m/s2
+    dt: float
+        Time step
+    label: str (default='m1')
+        Used for plotting
+    smooth_freq_range: tuple [floats] (default=(0.1, 30))
+        lower and upper bound of frequency range to compute the smoothed Fourier amplitude spectrum
+    verbose: int (default=0)
+        Level of output verbosity
+    response_times: tuple of floats (default=(0.1, 5))
+    ccbox: int
+        colour index for plotting
+    """
 
-        Parameters
-        ----------
-        values: array_like
-            Acceleration time series - should be in m/s2
-        dt: float
-            Time step
-        label: str (default='m1')
-            Used for plotting
-        smooth_freq_range: tuple [floats] (default=(0.1, 30))
-            lower and upper bound of frequency range to compute the smoothed Fourier amplitude spectrum
-        verbose: int (default=0)
-            Level of output verbosity
-        response_times: tuple of floats (default=(0.1, 5))
-        ccbox: int
-            colour index for plotting
-        """
-        super(AccSignal, self).__init__(values, dt, label=label, smooth_freq_range=smooth_freq_range, verbose=verbose, ccbox=ccbox)
-        if len(response_times) == 2:
-            self.response_times = np.linspace(response_times[0], response_times[1], 100)
+    def __init__(self, values, dt, label='m1', smooth_freq_range=(0.1, 30), smooth_fa_freqs=None, verbose=0, response_period_range=(0.1, 5),
+                 response_times=None, ccbox=0):
+
+        super(AccSignal, self).__init__(values, dt, label=label, smooth_freq_range=smooth_freq_range,
+                                        smooth_fa_freqs=smooth_fa_freqs, verbose=verbose, ccbox=ccbox)
+        if response_times is None:
+            self.response_times = np.linspace(response_period_range[0], response_period_range[1], 100)
         else:
             self.response_times = np.array(response_times)
         self._velocity = np.zeros(self.npts)
@@ -390,10 +446,21 @@ class AccSignal(Signal):
         self._cached_disp_and_velo = False
         self.reset_all_motion_stats()
 
-    def generate_response_spectrum(self, response_times=None, xi=-1, min_dt_ratio=4):
+    def gen_response_spectrum(self, response_times=None, xi=-1, min_dt_ratio=4):
         """
         Generate the response spectrum for the response_times for a given
-        damping (xi). default xi = 0.05
+        damping (xi).
+
+        Parameters
+        ----------
+        response_times: array_like
+            Time periods of SDOFs that response should be computed for
+        xi: float (default=0.05 or previously set)
+            Ratio of critical damping
+        min_dt_ratio: float
+            Smallest ratio between response period and integration time step,
+            acceleration time series will be interpolated to reach appropriate integration time step if
+            not achieved using the acceleration time series time step.
         """
         if self.verbose:
             print('Generating response spectra')
@@ -412,45 +479,42 @@ class AccSignal(Signal):
 
         if xi == -1:
             xi = self._cached_xi
-        self._s_d, self._s_v, self._s_a = dh.pseudo_response_spectra(values_interp, dt_interp, self.response_times, xi)
+        try:
+            self._s_d, self._s_v, self._s_a = dh.pseudo_response_spectra(values_interp, dt_interp, self.response_times, xi)
+        except MemoryError:
+            raise MemoryError('Out of memory. Length of acc (%i) and length of response_times (%i) too large, '
+                              'set larger min_dt_ratio.' % (len(values_interp), len(self.response_times)))
         self._cached_response_spectra = True
+
+    def generate_response_spectrum(self, response_times=None, xi=-1, min_dt_ratio=4):
+        self.gen_response_spectrum(response_times=response_times, xi=xi, min_dt_ratio=min_dt_ratio)
 
     @property
     def s_a(self):
-        """
-        Pseudo spectral response acceleration of linear SDOF
-        """
+        """Pseudo maximum response accelerations of linear SDOFs"""
         if not self._cached_response_spectra:
             self.generate_response_spectrum()
         return self._s_a
 
     @property
     def s_v(self):
-        """
-        Pseudo spectral response velocity of linear SDOF
-        """
+        """Pseudo maximum response velocities of linear SDOFs"""
         if not self._cached_response_spectra:
             self.generate_response_spectrum()
         return self._s_v
 
     @property
     def s_d(self):
-        """
-        Spectral response displacement of linear SDOF
-        """
+        """Maximum response displacements of linear SDOFs"""
         if not self._cached_response_spectra:
             self.generate_response_spectrum()
         return self._s_d
 
     def correct_me(self):
-        """
-        This provides a correction to an acceleration time series
-        """
+        """This provides a correction to an acceleration time series"""
+        from scipy.signal import detrend
 
-        # self.remove_average()
-        # self.butter_pass([0.1, 10])
-
-        disp = ss.detrend(self.displacement)
+        disp = detrend(self.displacement)
         vel = np.zeros(self.npts)
         acc = np.zeros(self.npts)
         for i in range(self.npts - 1):  # MEANS THAT ACC has a pulse at the end.
@@ -468,10 +532,6 @@ class AccSignal(Signal):
             motion type to apply method to
         freq_window: int
             window for applying the rolling average
-
-        Returns
-        -------
-
         """
         if mtype == "velocity":
             mot = self.velocity
@@ -502,9 +562,7 @@ class AccSignal(Signal):
         self.clear_cache()
 
     def rebase_displacement(self):
-        """
-        Correction to make the displacement zero at the end of the record
-        """
+        """Correction to make the displacement zero at the end of the record"""
 
         end_disp = self.displacement[-1]
 
@@ -513,11 +571,8 @@ class AccSignal(Signal):
         self.clear_cache()
 
     def generate_displacement_and_velocity_series(self, trap=True):
-        """
-        Calculates the displacement and velocity time series
-        """
-        self._velocity, self._displacement = sd.velocity_and_displacement_from_acceleration(self.values,
-                                                                                          self.dt, trap=trap)
+        """Calculates the displacement and velocity time series"""
+        self._velocity, self._displacement = sd.calc_velo_and_disp_from_accel_arr(self.values, self.dt, trap=trap)
         self._cached_disp_and_velo = True
 
     @property
@@ -527,6 +582,11 @@ class AccSignal(Signal):
             self.generate_displacement_and_velocity_series()
         return self._velocity
 
+    # @property
+    # def zeroed_velocity(self):
+    #     """Velocity time series with linear correction to have zero velocity at end"""
+    #     return self.velocity - np.arange(self.npts) * self.velocity[-1] / self.npts
+
     @property
     def displacement(self):
         """Displacement time series"""
@@ -534,9 +594,14 @@ class AccSignal(Signal):
             self.generate_displacement_and_velocity_series()
         return self._displacement
 
+    # @property
+    # def zeroed_displacement(self):
+    #     """Displacement time series with linear correction to have zero displacement at end"""
+    #     return self.displacement - np.arange(self.npts) * self.displacement[-1] / self.npts
+
     def generate_peak_values(self):
         """
-        Determines the peak signal values
+        DEPRECATED: all peak values are lazy loaded - this method does not need to be run.
         """
         deprecation("generate_peak_values() is no longer in use, all peak values are lazy loaded.")
 
@@ -546,7 +611,7 @@ class AccSignal(Signal):
         if "pga" in self._cached_params:
             return self._cached_params["pga"]
         else:
-            pga = sm.calc_peak(self.values)
+            pga = im.calc_peak(self.values)
             self._cached_params["pga"] = pga
             return pga
 
@@ -556,7 +621,7 @@ class AccSignal(Signal):
         if "pgv" in self._cached_params:
             return self._cached_params["pgv"]
         else:
-            pgv = sm.calc_peak(self.velocity)
+            pgv = im.calc_peak(self.velocity)
             self._cached_params["pgv"] = pgv
             return pgv
 
@@ -566,7 +631,7 @@ class AccSignal(Signal):
         if "pgd" in self._cached_params:
             return self._cached_params["pgd"]
         else:
-            pgd = sm.calc_peak(self.displacement)
+            pgd = im.calc_peak(self.displacement)
             self._cached_params["pgd"] = pgd
             return pgd
 
@@ -607,7 +672,7 @@ class AccSignal(Signal):
             self.a_rms10 = -1.
 
         # Trifunac and Brady
-        self.sd_start, self.sd_end = sm.calc_sig_dur_vals(self.values, self.dt, se=True)
+        self.sd_start, self.sd_end = im.calc_sig_dur_vals(self.values, self.dt, se=True)
 
         self.t_595 = self.sd_end - self.sd_start
 

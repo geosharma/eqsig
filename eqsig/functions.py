@@ -1,6 +1,4 @@
 import numpy as np
-import scipy
-
 import eqsig
 from eqsig import exceptions
 
@@ -11,11 +9,25 @@ def time_series_from_motion(motion, dt):
 
 
 def determine_indices_of_peaks_for_cleaned(values):
+    """DEPRECATED: Use determine_indices_of_peaks_for_cleaned_array()"""
+    return determine_indices_of_peaks_for_cleaned_array(values)
+
+
+def determine_indices_of_peaks_for_cleaned_array(values):
     """
     Determines the position of values that form a local peak in a signal.
 
-    :param values:
-    :return:
+    Warning: data must be cleaned so that adjacent points have the same value
+
+    Parameters
+    ----------
+    values: array_like
+        Array of values that peaks will be found in
+
+    Returns
+    -------
+    peak_indices: array_like of int
+        Array of indices of peaks
     """
     diff = np.ediff1d(values, to_begin=0)
     # if negative then direction has switched
@@ -27,26 +39,7 @@ def determine_indices_of_peaks_for_cleaned(values):
     return peak_indices
 
 
-# def determine_indices_of_zero_crossings_for_cleaned(values):
-#     """
-#     Determines the position of values that are equal or have just passed through zero.
-#
-#     :param values:
-#     :return:
-#     """
-#     diff = np.diff(values)
-#     # if negative then direction has switched
-#     direction_switch = diff[1:] * diff[:-1]
-#     direction_switch = np.insert(direction_switch, 0, 0)
-#     peaks = np.where(direction_switch < 0)
-#     peak_indices = peaks[0]
-#     peak_indices = np.insert(peak_indices, 0, 0)  # Include first and last value
-#     peak_indices = np.insert(peak_indices, len(peak_indices), len(values) - 1)
-#
-#     return peak_indices
-
-
-def determine_peak_only_series_4_cleaned_data(values):
+def _determine_peak_only_series_4_cleaned_data(values):
     """
     Determines the
 
@@ -55,7 +48,7 @@ def determine_peak_only_series_4_cleaned_data(values):
     :param values:
     :return:
     """
-    peak_indices = determine_indices_of_peaks_for_cleaned(values)
+    peak_indices = determine_indices_of_peaks_for_cleaned_array(values)
     peak_values = np.take(values, peak_indices)
     signs = np.where(np.mod(np.arange(len(peak_values)), 2), -1, 1)
     delta_peaks = np.where(-signs * peak_values < 0, -np.abs(peak_values), np.abs(peak_values))
@@ -74,7 +67,7 @@ def determine_peak_only_delta_series_4_cleaned_data(values):
     :param values:
     :return:
     """
-    peak_indices = determine_indices_of_peaks_for_cleaned(values)
+    peak_indices = determine_indices_of_peaks_for_cleaned_array(values)
     peak_values = np.take(values, peak_indices)
     delta_peaks = np.diff(peak_values)
     delta_peaks = np.insert(delta_peaks, 0, 0)
@@ -123,7 +116,7 @@ def get_peak_array_indices(values, ptype='all'):
     # remove all non-changing values
     cleaned_values, non_zero_indices = clean_out_non_changing(values)
     # cleaned_values *= np.sign(cleaned_values[1])  # ensure first value is increasing
-    peak_cleaned_indices = determine_indices_of_peaks_for_cleaned(cleaned_values)
+    peak_cleaned_indices = determine_indices_of_peaks_for_cleaned_array(cleaned_values)
     peak_full_indices = np.take(non_zero_indices, peak_cleaned_indices)
     if ptype == 'min':
         if values[1] - values[0] <= 0:
@@ -271,7 +264,7 @@ def determine_pseudo_cyclic_peak_only_series(values):
     cleaned_values, non_zero_indices = clean_out_non_changing(values)
     cleaned_values *= np.sign(cleaned_values[1])  # ensure first value is increasing
     # compute delta peaks for cleaned data
-    cleaned_delta_peak_series = determine_peak_only_series_4_cleaned_data(cleaned_values)
+    cleaned_delta_peak_series = _determine_peak_only_series_4_cleaned_data(cleaned_values)
     # re-index data to uncleaned array
     delta_peaks_series = np.zeros_like(values)
     np.put(delta_peaks_series, non_zero_indices, cleaned_delta_peak_series)
@@ -282,9 +275,14 @@ def fas2signal(fas, dt, stype="signal"):
     """
     Convert a fourier spectrum to time series signal
 
-    :param fas: positive part only
-    :param dt: time step of time series
-    :return:
+    Parameters
+    ----------
+    fas: array_like of img floats
+        Positive part only
+    dt: float
+        time step of time series
+    stype: str
+        If 'signal' then return Signal, else return AccSignal
     """
     from eqsig.single import Signal, AccSignal
     n = 2 * len(fas)
@@ -299,6 +297,31 @@ def fas2signal(fas, dt, stype="signal"):
         return Signal(s, dt)
     else:
         return AccSignal(s, dt)
+
+
+def fas2values(fas, dt):
+    """
+    Convert a fourier spectrum to time series signal
+
+    Parameters
+    ----------
+    fas: array_like of img floats
+        Positive part only
+    dt: float
+        time step of time series
+    stype: str
+        If 'signal' then return Signal, else return AccSignal
+    """
+
+    n = 2 * len(fas)
+    a = np.zeros(2 * len(fas), dtype=complex)
+    a[1:n // 2] = fas[1:]
+    a[n // 2 + 1:] = np.flip(np.conj(fas[1:]), axis=0)
+    a /= dt
+    s = np.fft.ifft(a)
+    npts = int(2 ** (np.log(n) / np.log(2)))
+    s = s[:npts]
+    return s
 
 
 def generate_fa_spectrum(sig, n_pad=True):
@@ -316,14 +339,47 @@ def generate_fa_spectrum(sig, n_pad=True):
     fa_frequencies: array_like
         Frequencies of the spectrum
     """
+
     npts = sig.npts
     if n_pad:
         n_factor = 2 ** int(np.ceil(np.log2(npts)))
-        fa = scipy.fft(sig.values, n=n_factor)
+        fa = np.fft.fft(sig.values, n=n_factor)
         points = int(n_factor / 2)
         assert len(fa) == n_factor
     else:
-        fa = scipy.fft(sig.values)
+        fa = np.fft.fft(sig.values)
+        points = int(sig.npts / 2)
+    fa_spectrum = fa[range(points)] * sig.dt
+    fa_frequencies = np.arange(points) / (2 * points * sig.dt)
+    return fa_spectrum, fa_frequencies
+
+
+def calc_fa_spectrum(sig, n=None, p2_plus=None):
+    """
+    Produces the Fourier amplitude spectrum
+
+    Parameters
+    ----------
+    sig: eqsig.Signal
+
+    Returns
+    -------
+    fa_spectrum: complex array_like
+        Complex values of the spectrum
+    fa_frequencies: array_like
+        Frequencies of the spectrum
+    """
+    npts = sig.npts
+    if p2_plus is not None or n is not None:
+        if n is not None:
+            n_vals = n
+        else:
+            n_vals = 2 ** int(np.ceil(np.log2(npts)) + p2_plus)
+        fa = np.fft.fft(sig.values, n=n_vals)
+        points = int(n_vals / 2)
+        assert len(fa) == n_vals
+    else:
+        fa = np.fft.fft(sig.values)
         points = int(sig.npts / 2)
     fa_spectrum = fa[range(points)] * sig.dt
     fa_frequencies = np.arange(points) / (2 * points * sig.dt)
@@ -331,6 +387,32 @@ def generate_fa_spectrum(sig, n_pad=True):
 
 
 def interp_array_to_approx_dt(values, dt, target_dt=0.01, even=True):
+    """
+    Interpolate an array of values to a new time step
+
+    Similar to ``interp_to_approx_dt``
+
+    Only a target time step is provided and the algorithm determines
+     what time step is best to minimise loss of data from aliasing
+
+    Parameters
+    ----------
+    values: array_like
+        values of time series
+    dt: float
+        Time step
+    target_dt: float
+        Target time step
+    even: bool
+        If true then forces the number of time steps to be an even number
+
+    Returns
+    -------
+    new_values: array_like
+        Interpolated value of time series
+    new_dt: float
+        New time step of interpolate time series
+    """
     factor = dt / target_dt
     if factor == 1:
         pass
@@ -365,7 +447,8 @@ def interp_to_approx_dt(asig, target_dt=0.01, even=True):
 
     Returns
     -------
-
+    new_asig: eqsig.AccSignal
+        Acceleration time series object of interpolated time series
     """
     acc_interp, dt_interp = interp_array_to_approx_dt(asig.values, asig.dt, target_dt=target_dt, even=even)
     return eqsig.AccSignal(acc_interp, dt_interp)
@@ -391,6 +474,7 @@ def resample_to_approx_dt(asig, target_dt=0.01, even=True):
     -------
 
     """
+    from scipy.signal import resample
     factor = asig.dt / target_dt
     if factor == 1:
         pass
@@ -401,7 +485,7 @@ def resample_to_approx_dt(asig, target_dt=0.01, even=True):
     new_npts = factor * asig.npts
     if even:
         new_npts = 2 * int(new_npts / 2)
-    acc_interp = scipy.signal.resample(asig.values, new_npts)
+    acc_interp = resample(asig.values, new_npts)
     return eqsig.AccSignal(acc_interp, asig.dt / factor)
 
 
@@ -435,7 +519,7 @@ def get_switched_peak_array_indices(values):
     -------
     array_like
     """
-    peak_indices = eqsig.get_peak_array_indices(values)
+    peak_indices = get_peak_array_indices(values)
     peak_values = np.take(values, peak_indices)
 
     last = peak_values[0]
@@ -641,23 +725,102 @@ def time_indices(npts, dt, start, end, index):
     return s_index, e_index
 
 
+def calc_smooth_fa_spectrum(fa_frequencies, fa_spectrum, smooth_fa_frequencies=None, band=40):
+    """
+    Calculates the smoothed Fourier Amplitude Spectrum using the method by Konno and Ohmachi (1998)
+
+    Note: different order of inputs than generate_smooth_fa_spectrum
+
+    Parameters
+    ----------
+    smooth_fa_frequencies: array_like
+        Frequencies to compute the smoothed amplitude
+    fa_frequencies: array_like
+        Frequencies of the Fourier amplitude spectrum
+    fa_spectrum: array_like
+        Amplitudes of the Fourier amplitude spectrum
+    band:
+        window parameter
+
+    Returns
+    -------
+    smoothed_fa_spectrum: array_like
+        Amplitudes of smoothed Fourier spectrum at specified frequencies
+    """
+
+    if fa_frequencies[0] == 0:
+        fa_frequencies = fa_frequencies[1:]
+        fa_spectrum = fa_spectrum[1:]
+    if smooth_fa_frequencies is None:
+        smooth_fa_frequencies = fa_frequencies
+
+    amp_array = band * np.log10(fa_frequencies[:, np.newaxis] / smooth_fa_frequencies[np.newaxis, :])
+    wb_vals = (np.sin(amp_array) / amp_array) ** 4
+    wb_vals = np.where(amp_array == 0, 1, wb_vals)
+    wb_vals /= np.sum(wb_vals, axis=0)
+
+    return np.sum(abs(fa_spectrum)[:, np.newaxis] * wb_vals, axis=0)
+    # return np.dot(abs(fa_spectrum), wb_vals)
+
+
 def generate_smooth_fa_spectrum(smooth_fa_frequencies, fa_frequencies, fa_spectrum, band=40):
-    smooth_fa_spectrum = np.zeros_like(smooth_fa_frequencies)
-    for i in range(smooth_fa_frequencies.size):
-        f_centre = smooth_fa_frequencies[i]
-        amp_array = np.log10((fa_frequencies / f_centre) ** band)
+    """Deprecated - use calc_smooth_fa_spectrum"""
+    return calc_smooth_fa_spectrum(fa_frequencies, fa_spectrum, smooth_fa_frequencies, band=band)
 
-        amp_array[0] = 0
 
-        wb_vals = np.zeros((len(amp_array)))
-        for j in range(len(amp_array)):
-            if amp_array[j] == 0:
-                wb_vals[j] = 1
-            else:
-                wb_vals[j] = (np.sin(amp_array[j]) / amp_array[j]) ** 4
+def calc_smoothing_matrix_konno_1998(fa_frequencies, smooth_fa_frequencies=None, band=40):
+    """
+    Calculates the smoothing matrix for computing the smoothed Fourier Amplitude Spectrum
+        using the method by Konno and Ohmachi 1998
 
-        smooth_fa_spectrum[i] = (sum(abs(fa_spectrum) * wb_vals) / sum(wb_vals))
-    return smooth_fa_spectrum
+    Parameters
+    ----------
+    fa_frequencies: array_like
+        Frequencies of FAS
+    smooth_fa_frequencies: array_like
+        Frequencies that smooth FAS should be computed at
+    band: int
+        Bandwidth of smoothing function
+
+    Returns
+    -------
+    2d-array_like
+    """
+
+    if fa_frequencies[0] == 0:
+        fa_frequencies = fa_frequencies[1:]
+
+    if smooth_fa_frequencies is None:
+        smooth_fa_frequencies = fa_frequencies
+
+    amp_array = band * np.log10(fa_frequencies[:, np.newaxis] / smooth_fa_frequencies[np.newaxis, :])
+    wb_vals = (np.sin(amp_array) / amp_array) ** 4
+    wb_vals = np.where(amp_array == 0, 1, wb_vals)
+    wb_vals /= np.sum(wb_vals, axis=0)
+    return wb_vals
+
+
+def calc_smooth_fa_spectrum_w_custom_matrix(asig, smooth_matrix):
+    """
+    Calculates the smoothed Fourier Amplitude Spectrum
+    using a custom filter
+
+    """
+    return np.dot(abs(asig.fa_spectrum[1:]), smooth_matrix)
+
+
+# def dep_generate_smooth_fa_spectrum(smooth_fa_frequencies, fa_frequencies, fa_spectrum, band=40):
+#     if fa_frequencies[0] == 0:
+#         fa_frequencies = fa_frequencies[1:]
+#         fa_spectrum = fa_spectrum[1:]
+#     smooth_fa_spectrum = np.zeros_like(smooth_fa_frequencies)  # TODO: remove for loop
+#     for i in range(smooth_fa_frequencies.size):
+#         f_centre = smooth_fa_frequencies[i]
+#         amp_array = band * np.log10(fa_frequencies / f_centre)
+#         wb_vals = np.where(amp_array == 0, 1, (np.sin(amp_array) / amp_array) ** 4)
+#
+#         smooth_fa_spectrum[i] = (np.sum(abs(fa_spectrum) * wb_vals) / np.sum(wb_vals))
+#     return smooth_fa_spectrum
 
 
 def calc_step_fn_vals_error(values, pow=1, dir=None):
@@ -749,13 +912,144 @@ def calc_roll_av_vals(values, steps, mode='forward'):
     return (csum[steps:] - csum[:-steps]) / steps
 
 
-if __name__ == '__main__':
-    vals = np.arange(4, 6)
-    sfs = np.array([-1, 2])
-    expected_full = np.array([[4, 5, 0, 0, 0],
-                              [0, 0, 0, 4, 5],
-                              ])
-    out_a = put_array_in_2d_array(vals, sfs, clip='start')
-    # out_a = join_values_w_shifts(vals, sfs, jtype='sub')
+def interp2d(x, xf, f):
+    """
+    Can interpolate a table to get an array of values in 2D
 
-    print(out_a)
+    Parameters
+    ----------
+    x: array_like
+        1d array of values to be interpolated
+    xf: 1d array of values
+    f: array_like
+        2d array of function values size=(len(x), n)
+
+    Returns
+    -------
+
+    Examples
+    --------
+    >>> f = np.array([[0, 0, 0],
+    >>>              [0, 1, 4],
+    >>>              [2, 6, 2],
+    >>>              [10, 10, 10]
+    >>>              ])
+    >>> xf = np.array([0, 1, 2, 3])
+
+    >>> x = np.array([0.5, 1, 2.2, 2.5])
+    >>> f_interp = interp2d(x, xf, f)
+    >>> print(f_interp[0][0])
+    0.0
+    >>> print(f_interp[0][1])
+    0.5
+    >>> print(f_interp[0][2])
+    2.0
+    """
+    ind = np.argmin(np.abs(x[:, np.newaxis] - xf), axis=1)
+    x_ind = xf[ind]
+    ind0 = np.where(x_ind > x, ind - 1, ind)
+    ind1 = np.where(x_ind > x, ind, ind + 1)
+    ind0 = np.clip(ind0, 0, None)
+    ind1 = np.clip(ind1, None, len(xf) - 1)
+    f0 = f[ind0]
+    f1 = f[ind1]
+    a0 = xf[ind0]
+    a1 = xf[ind1]
+    denom = (a1 - a0)
+    denom_adj = np.clip(denom, 1e-10, None)  # to avoid divide by zero warning
+    s0 = np.where(denom > 0, (x - a0) / denom_adj, 1)  # if denom less than 0, then out of bounds
+    s1 = 1 - s0
+    return s1[:, np.newaxis] * f0 + s0[:, np.newaxis] * f1
+
+
+def interp_left(x0, x, y=None):
+    """
+    Interpolation takes the lower value
+
+    Parameters
+    ----------
+    x0: array_like
+        Values to be interpolated on x-axis
+    x: array_like
+        Existing values on x-axis
+    y: array_like
+        Existing y-axis values
+    Returns
+    -------
+
+    """
+    if y is None:
+        y = np.arange(len(x))
+    else:
+        y = np.array(y)
+    is_scalar = False
+    if not hasattr(x0, '__len__'):
+        is_scalar = True
+        x0 = [x0]
+    assert min(x0) >= x[0], (min(x0), x[0])
+    inds = np.searchsorted(x, x0, side='right') - 1
+    if is_scalar:
+        return y[inds][0]
+    return y[inds]
+
+
+def remove_poly(values, poly_fit=0):
+    """
+    Calculates best fit polynomial and removes it from the record
+    """
+
+    x = np.linspace(0, 1.0, len(values))
+    cofs = np.polyfit(x, values, poly_fit)
+    y_cor = 0 * x
+    for co in range(len(cofs)):
+        mods = x ** (poly_fit - co)
+        y_cor += cofs[co] * mods
+
+    return values - y_cor
+
+
+def gen_ricker_wavelet_asig(omega, t0, duration, dt):
+    """
+    Generates an acceleration time series that is a Ricker wavelet
+
+    Parameters
+    ----------
+    omega
+    t0
+    duration: float
+        Total duration of motion
+    dt: float
+        Time step of motion
+
+    Returns
+    -------
+
+    """
+    t = np.arange(0, duration, dt)
+
+    vel_amp = (2.0 * (np.pi ** 2.0) * (omega ** 2.0) * ((t - t0) ** 2.0) - 1.0) * np.exp(
+        - (np.pi ** 2.0) * (omega ** 2.0) * (t - t0) ** 2.0)
+    acc = np.zeros_like(vel_amp)
+    acc[1:] = np.diff(vel_amp) / dt
+    return eqsig.AccSignal(acc, dt)
+
+
+
+if __name__ == '__main__':
+    x0 = [0, 1, 5]
+    x = [0, 2, 6]
+    y = [1.5, 2.5, 3.5]
+    y_new = interp_left(x0, x, y)
+    expected = np.array([1.5, 1.5, 2.5])
+    assert np.isclose(y_new, expected).all(), y_new
+
+    x0 = [0, 2, 6]
+    y_new = interp_left(x0, x, y)
+    expected = np.array([1.5, 2.5, 3.5])
+    assert np.isclose(y_new, expected).all(), y_new
+    x0 = [-1, 2, 6]
+    y_new = interp_left(x0, x, y)
+    expected = np.array([1.5, 2.5, 3.5])
+    # assert np.isclose(y_new, expected).all(), y_new
+    print(y_new)
+

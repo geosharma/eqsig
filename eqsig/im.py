@@ -1,5 +1,5 @@
 import numpy as np
-import scipy.integrate
+
 from eqsig import sdof, functions
 from eqsig.exceptions import deprecation
 
@@ -45,8 +45,7 @@ def calc_sig_dur_vals(motion, dt, start=0.05, end=0.95, se=False):
     tuple (start_time, end_time)
     """
 
-    acc2 = motion ** 2
-    cum_acc2 = np.cumsum(acc2)
+    cum_acc2 = np.cumsum(motion ** 2)
     ind2 = np.where((cum_acc2 > start * cum_acc2[-1]) & (cum_acc2 < end * cum_acc2[-1]))
     start_time = ind2[0][0] * dt
     end_time = ind2[0][-1] * dt
@@ -126,8 +125,8 @@ def calc_sir(acc_sig):
 
 
 def _raw_calc_arias_intensity(acc, dt):
-    acc2 = acc ** 2
-    return np.pi / (2 * 9.81) * scipy.integrate.cumtrapz(acc2, dx=dt, initial=0)
+    from scipy.integrate import cumtrapz
+    return np.pi / (2 * 9.81) * cumtrapz(acc ** 2, dx=dt, initial=0)
 
 
 def calc_arias_intensity(acc_sig):
@@ -155,8 +154,9 @@ def calc_cav(acc_sig):
     Electrical Power Research Institute. Standardization of the Cumulative
     Absolute Velocity. 1991. EPRI TR-100082-1'2, Palo Alto, California.
     """
+    from scipy.integrate import cumtrapz
     abs_acc = np.abs(acc_sig.values)
-    return scipy.integrate.cumtrapz(abs_acc, dx=acc_sig.dt, initial=0)
+    return cumtrapz(abs_acc, dx=acc_sig.dt, initial=0)
 
 
 def calc_cav_dp(asig):
@@ -171,6 +171,7 @@ def calc_cav_dp(asig):
     :param asig:
     :return:
     """
+    from scipy.integrate import trapz
     start = 0
     pga_max = 0
     cav_dp = 0
@@ -197,7 +198,7 @@ def calc_cav_dp(asig):
         x_upper = end * asig.dt  # the upper limit of x
         x_int = interval_time[np.where((x_lower <= interval_time) * (interval_time <= x_upper))]
         y_int = np.abs(np.array(abs_acc_interval)[np.where((x_lower <= interval_time) * (interval_time <= x_upper))])
-        int_acc = scipy.integrate.trapz(y_int, x_int)
+        int_acc = trapz(y_int, x_int)
 
         # calculation of pga (g)
         pga = (max(abs_acc_interval))
@@ -226,7 +227,8 @@ def calc_isv(acc_sig):
     See Kokusho (2013)
     :return:
     """
-    return scipy.integrate.cumtrapz(acc_sig.velocity ** 2, dx=acc_sig.dt, initial=0)
+    from scipy.integrate import cumtrapz
+    return cumtrapz(acc_sig.velocity ** 2, dx=acc_sig.dt, initial=0)
 
 
 def cumulative_response_spectra(acc_signal, fun_name, periods=None, xi=None):
@@ -307,7 +309,7 @@ def calc_bandwidth_f_min(asig, ratio=0.707):
     ----------
     asig: eqsig.AccSignal
         Acceleration time series object
-    ratio:
+    ratio: float
         ratio of maximum value where bandwidth should be computed
 
     Returns
@@ -330,7 +332,7 @@ def calc_bandwidth_f_max(asig, ratio=0.707):
         ----------
         asig: eqsig.AccSignal
             Acceleration time series object
-        ratio:
+        ratio: float
             ratio of maximum value where bandwidth should be computed
 
         Returns
@@ -346,6 +348,7 @@ def calc_bandwidth_f_max(asig, ratio=0.707):
 
 
 def calc_bracketed_duration(asig, threshold):
+    """DEPRECATED: Use calc_brac_dur"""
     deprecation("Use calc_brac_dur")
     return calc_brac_dur(asig, threshold)
 
@@ -396,6 +399,7 @@ def calc_acc_rms(asig, threshold):
 
 
 def calc_a_rms(asig, threshold):
+    """DEPRECATED"""
     raise ValueError('calc_a_rms has been removed, use calc_acc_rms note that threshold changed to m/s2')
 
 
@@ -437,7 +441,7 @@ def calc_n_cyc_array_w_power_law(values, a_ref, b, cut_off=0.01):
     -------
     array_like
     """
-
+    from scipy.interpolate import interp1d
     peak_indices = functions.get_switched_peak_array_indices(values)
     csr_peaks = np.abs(np.take(values, peak_indices))
     csr_peaks = np.where(csr_peaks < cut_off * np.max(abs(values)), 1.0e-14, csr_peaks)
@@ -449,7 +453,7 @@ def calc_n_cyc_array_w_power_law(values, a_ref, b, cut_off=0.01):
     n_eq = np.insert(n_eq, len(n_eq)-1, n_eq[-1], axis=0)
     peak_indices = np.insert(peak_indices, len(n_eq)-1, len(values), axis=0)
 
-    f = scipy.interpolate.interp1d(peak_indices, n_eq, kind='previous', axis=0)
+    f = interp1d(peak_indices, n_eq, kind='previous', axis=0)
     n_series = f(np.arange(len(values)))
     return n_series
 
@@ -469,6 +473,8 @@ def calc_cyc_amp_array_w_power_law(values, n_cyc, b):
     csr_peaks_s1 = np.zeros_like(values)
     np.put(csr_peaks_s1, a1_peak_inds_end, a1_csr_peaks_end)
     csr_n15_series1 = np.cumsum((np.abs(csr_peaks_s1)[:, np.newaxis] ** (1. / b)) / 2 / n_cyc, axis=0) ** b
+    if not hasattr(b, '__len__'):
+        return np.reshape(csr_n15_series1, len(values))
     return csr_n15_series1
 
 

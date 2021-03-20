@@ -25,9 +25,9 @@ setup(name='eqsig',
           'License :: OSI Approved :: MIT License',
           'Programming Language :: Python :: 3',
       ],
-      packages=find_packages(exclude=['contrib', 'docs', 'tests']),
+      packages=find_packages(exclude=['contrib', 'docs', 'tests', 'examples', '.circleci']),
       install_requires=[
-        "numpy",
+        "numpy>=1.16",
         "scipy>=1.2.1",
     ],
       # List additional groups of dependencies here (e.g. development
@@ -38,9 +38,8 @@ setup(name='eqsig',
           'test': ['pytest'],
       },
       python_requires='>=3',
-      package_data={
-          'models': ['models_data.dat'],
-      },
+      package_data={},
+      include_package_data=True,
       zip_safe=False)
 
 

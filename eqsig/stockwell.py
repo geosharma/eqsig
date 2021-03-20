@@ -1,11 +1,8 @@
 import numpy as np
-import scipy
-import scipy.fftpack
-import scipy.signal
 import eqsig.multiple
 
 
-def plot_stock(splot, asig, norm_x=False, norm_all=False, interp=False, cmap=None):
+def plot_stock(splot, asig, norm_x=False, norm_all=False, interp=False, cmap=None, vmin=None, vmax=None):
     """
     Plots the Stockwell transform of an acceleration signal
 
@@ -41,7 +38,11 @@ def plot_stock(splot, asig, norm_x=False, norm_all=False, interp=False, cmap=Non
     kwargs = {}
     if cmap is not None:
         kwargs['cmap'] = cmap  # rainbow, gnuplot2, plasma
-    splot.imshow(b, aspect='auto', extent=extent, **kwargs)
+    if vmin is not None:
+        kwargs['vmin'] = vmin
+    if vmax is not None:
+        kwargs['vmax'] = vmax
+    return splot.imshow(b, aspect='auto', extent=extent, **kwargs)
 
 
 def plot_tifq_vals(subplot, tifq_vals, dt, norm_all=False, norm_x=False, cmap=None):
@@ -125,6 +126,31 @@ def generate_gaussian(n_d2):
     return np.exp(-p ** 2 / 2).transpose()  # * np.exp(1j * p / n_d2)
 
 
+def transform_w_scipy_fft(acc, interp=False):
+    """
+    Performs a Stockwell transform on an array
+
+    Assumes m = 1, p = 1
+
+    :param acc: array_like
+    :return:
+    """
+    from scipy.linalg import toeplitz
+    from scipy.fftpack import fft, ifft  # Try use scipy.fft
+
+    acc_db = acc
+    n_d2 = int(len(acc) / 2)
+    n_factor = 2 * n_d2
+    gaussian = generate_gaussian(n_d2)
+
+    fa = fft(acc_db, n_factor, overwrite_x=True)
+    diag_con = toeplitz(np.conj(fa[:n_d2 + 1]), fa)
+    diag_con = diag_con[1:n_d2 + 1, :]  # first line is zero frequency
+    stock = np.flipud(ifft(diag_con * gaussian, axis=1))
+
+    return stock
+
+
 def transform(acc, interp=False):
     """
     Performs a Stockwell transform on an array
@@ -134,35 +160,67 @@ def transform(acc, interp=False):
     :param acc: array_like
     :return:
     """
-    # Interpolate here because function drops a time step
-    if interp:
-        t_int = np.arange(len(acc))
-        t_db = np.arange(2 * len(acc)) / 2
-        acc_db = np.interp(t_db, t_int, acc)
-        n_d2 = int(len(acc))
-    else:
-        acc_db = acc
-        n_d2 = int(len(acc) / 2)
+    from scipy.linalg import toeplitz
+
+    acc_db = acc
+    n_d2 = int(len(acc) / 2)
     n_factor = 2 * n_d2
     gaussian = generate_gaussian(n_d2)
-    # st0 = np.mean(acc) * np.ones(n_factor)
 
-    fa = scipy.fftpack.fft(acc_db, n_factor, overwrite_x=True)
-    diag_con = scipy.linalg.toeplitz(np.conj(fa[:n_d2 + 1]), fa)
+    fa = np.fft.fft(acc_db, n_factor)
+    diag_con = toeplitz(np.conj(fa[:n_d2 + 1]), fa)
     diag_con = diag_con[1:n_d2 + 1, :]  # first line is zero frequency
-    skip_is = 0  # can skip more low frequencies since they tend to be zero
-    stock = np.flipud(scipy.fftpack.ifft(diag_con[skip_is:, :] * gaussian[skip_is:, :], axis=1))
 
-    # stock = np.insert(stock, 0, st0, 0)
-    for i in range(skip_is):
-        stock = np.insert(stock, 0, 0, 0)
+    stock = np.flipud(np.fft.ifft(diag_con * gaussian, axis=1))
 
     return stock
 
 
+def transform_slow(acc, interp=False, ith=0):
+    """
+    Performs a Stockwell transform on an array
+
+    Assumes m = 1, p = 1
+
+    :param acc: array_like
+    :return:
+    """
+    from scipy.linalg import toeplitz
+
+    acc_db = acc
+    n_d2 = int(len(acc) / 2)
+    n_factor = 2 * n_d2
+    gaussian = generate_gaussian(n_d2)
+
+    fa = np.fft.fft(acc_db, n_factor)
+    diag_con = toeplitz(np.conj(fa[:n_d2 + 1]), fa)
+    diag_con = diag_con[1:n_d2 + 1, :]  # first line is zero frequency
+    skip_is = 0  # can skip more low frequencies since they tend to be zero
+    aa = diag_con[skip_is:, :] * gaussian[skip_is:, :]
+    upstock = np.zeros_like(aa)
+    aa = aa[:-ith, :]
+    upstock[:-ith, :] = np.fft.ifft(aa, axis=1)
+    stock = np.flipud(upstock)
+    return stock
+
+
+def dep_itransform(stock):
+    """Performs an inverse Stockwell Transform"""
+    from scipy.fftpack import ifft  # Try use scipy.fft
+    return np.real(ifft(np.sum(stock, axis=1)))
+
+
 def itransform(stock):
     """Performs an inverse Stockwell Transform"""
-    return np.real(scipy.fftpack.ifft(np.sum(stock, axis=1)))
+    ss = np.sum(stock, axis=1)
+    n = 2 * len(ss)
+    fas_ss = np.zeros(2 * len(ss), dtype=complex)
+    fas_ss[1:n // 2] = np.flip(np.conj(ss[1:]), axis=0)
+    fas_ss[n // 2 + 1:] = ss[1:]
+
+    acc_new = np.fft.ifft(fas_ss)
+    npts = int(np.ceil(2 ** (np.log(n) / np.log(2))))
+    return np.real(acc_new[:npts])
 
 
 def get_max_stockwell_freq(asig):
